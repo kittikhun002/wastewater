@@ -3,13 +3,12 @@ name: Auto Build and Release ESP32
 on:
   push:
     tags:
-      - 'v*' # รันอัตโนมัติเมื่อ push tag เช่น v1.0.0
-  workflow_dispatch: # เพิ่มปุ่มกดสั่ง Run เองได้ในหน้า Actions (สำหรับทดสอบ)
+      - 'v*' 
+  workflow_dispatch: # เพิ่มตัวนี้เพื่อกดรันเองได้
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -31,3 +30,4 @@ jobs:
           files: .pio/build/*/firmware.bin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# Updated at: 2026-04-22
