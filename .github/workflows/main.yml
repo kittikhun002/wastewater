@@ -1,0 +1,33 @@
+name: Auto Build and Release ESP32
+
+on:
+  push:
+    tags:
+      - 'v*' # รันอัตโนมัติเมื่อ push tag เช่น v1.0.0
+  workflow_dispatch: # เพิ่มปุ่มกดสั่ง Run เองได้ในหน้า Actions (สำหรับทดสอบ)
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      - name: Run PlatformIO Build
+        run: pio run
+
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: .pio/build/*/firmware.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
