@@ -7,8 +7,8 @@
 #include <WiFiClientSecure.h>
 
 // ====== ตั้งค่า WiFi ของคุณ ======
-const char* ssid = "trueGigatexFiber_ef4_2G"; 
-const char* password = "XP6b7E2M";
+const char* ssid = "ใส่ชื่อ_WIFI_ของคุณ"; 
+const char* password = "ใส่รหัสผ่าน_WIFI_ของคุณ";
 
 // ====== ลิงก์อมตะ (ดึง Latest Release เสมอ) ======
 const char* update_url = "https://github.com/kittikhun002/wastewater/releases/latest/download/firmware.bin";
@@ -21,7 +21,6 @@ void doUpdate() {
   Serial.println("[OTA] เริ่มต้นตรวจสอบอัปเดตจาก GitHub...");
   Serial.println("====================================");
   
-  // ของ ESP8266 จะใช้คำสั่ง ESPhttpUpdate
   t_httpUpdate_return ret = ESPhttpUpdate.update(otaClient, update_url);
 
   switch (ret) {
@@ -35,7 +34,6 @@ void doUpdate() {
 
     case HTTP_UPDATE_OK:
       Serial.println("[OTA] อัปเดตสำเร็จ! บอร์ดกำลังจะ Restart...");
-      // ESP8266 จะรีสตาร์ทตัวเองอัตโนมัติเมื่ออัปเดตเสร็จ
       break;
   }
 }
@@ -43,9 +41,9 @@ void doUpdate() {
 void setup() {
   Serial.begin(115200);
 
-  // *** ข้อความแสดงเวอร์ชันปัจจุบัน ***
+  // *** จุดไคลแมกซ์: เปลี่ยนตรงนี้เป็น 2.0 ***
   Serial.println("\n=================================");
-  Serial.println(">>> ESP8266 Firmware Version: 1.0 <<<");
+  Serial.println(">>> ESP8266 Firmware Version: 2.0 (OTA SUCCESS!) <<<");
   Serial.println("=================================");
 
   Serial.print("Connecting to WiFi");
@@ -58,12 +56,12 @@ void setup() {
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
   
-  // รอ 3 วินาที แล้วเริ่มดึงไฟล์อัปเดต
+  // ใน V2 จะใส่ doUpdate() ไว้เผื่ออัปเดตเป็น V3 ต่อในอนาคตครับ
   delay(3000); 
   doUpdate(); 
 }
 
 void loop() {
-  Serial.println("System is running Version 1.0... Waiting for updates.");
+  Serial.println("System is running Version 2.0...");
   delay(3000);
 }
