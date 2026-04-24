@@ -1,37 +1,69 @@
 #include <Arduino.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <HTTPUpdate.h>
+#include <ESP8266WiFi.h>
+
+// ====== Library สำหรับ OTA ของ ESP8266 ======
+#include <ESP8266HTTPClient.h>
+#include <ESP8266httpUpdate.h>
 #include <WiFiClientSecure.h>
 
-const char* ssid = "Wokwi-GUEST"; 
-const char* password = "";
+// ====== ตั้งค่า WiFi ของคุณ ======
+const char* ssid = "trueGigatexFiber_ef4_2G"; 
+const char* password = "XP6b7E2M";
 
-// ใช้ลิงก์อมตะ (Latest)
+// ====== ลิงก์อมตะ (ดึง Latest Release เสมอ) ======
 const char* update_url = "https://github.com/kittikhun002/wastewater/releases/latest/download/firmware.bin";
 
 void doUpdate() {
   WiFiClientSecure otaClient;
-  otaClient.setInsecure();
-  httpUpdate.update(otaClient, update_url);
+  otaClient.setInsecure(); // ข้ามการตรวจ SSL
+
+  Serial.println("\n====================================");
+  Serial.println("[OTA] เริ่มต้นตรวจสอบอัปเดตจาก GitHub...");
+  Serial.println("====================================");
+  
+  // ของ ESP8266 จะใช้คำสั่ง ESPhttpUpdate
+  t_httpUpdate_return ret = ESPhttpUpdate.update(otaClient, update_url);
+
+  switch (ret) {
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("[OTA] อัปเดตล้มเหลว Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+      break;
+
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("[OTA] ไม่มีเวอร์ชันใหม่");
+      break;
+
+    case HTTP_UPDATE_OK:
+      Serial.println("[OTA] อัปเดตสำเร็จ! บอร์ดกำลังจะ Restart...");
+      // ESP8266 จะรีสตาร์ทตัวเองอัตโนมัติเมื่ออัปเดตเสร็จ
+      break;
+  }
 }
 
 void setup() {
   Serial.begin(115200);
-  
-  // *** จุดที่เปลี่ยนคือตรงนี้ครับ เป็น 2.0 ***
+
+  // *** ข้อความแสดงเวอร์ชันปัจจุบัน ***
   Serial.println("\n=================================");
-  Serial.println(">>> Firmware Version: 2.0 (SUCCESS!) <<<");
+  Serial.println(">>> ESP8266 Firmware Version: 1.0 <<<");
   Serial.println("=================================");
 
+  Serial.print("Connecting to WiFi");
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
   
-  // ใน V2 ไม่ต้องเรียก doUpdate ใน setup แล้วก็ได้ครับ 
-  // หรือจะใส่ไว้เผื่ออัปเดตเป็น V3 ต่อไปก็ได้
+  // รอ 3 วินาที แล้วเริ่มดึงไฟล์อัปเดต
+  delay(3000); 
+  doUpdate(); 
 }
 
 void loop() {
-  Serial.println("V2 is running perfectly...");
-  delay(2000);
+  Serial.println("System is running Version 1.0... Waiting for updates.");
+  delay(3000);
 }
