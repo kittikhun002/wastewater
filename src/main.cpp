@@ -7,8 +7,8 @@
 #include <WiFiClientSecure.h>
 
 // ====== ตั้งค่า WiFi ของคุณ ======
-const char* ssid = "ใส่ชื่อ_WIFI_ของคุณ"; 
-const char* password = "ใส่รหัสผ่าน_WIFI_ของคุณ";
+const char* ssid = "trueGigatexFiber_ef4_2G"; 
+const char* password = "XP6b7E2M";
 
 // ====== ลิงก์อมตะ (ดึง Latest Release เสมอ) ======
 const char* update_url = "https://github.com/kittikhun002/wastewater/releases/latest/download/firmware.bin";
