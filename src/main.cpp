@@ -5,11 +5,17 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
+// ====== เพิ่ม Library สำหรับ OTA ======
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <WiFiClientSecure.h>
+
 Receiver4_20 sensor(&Wire, 0x44);
 
 // ====== ตั้งค่า WiFi ======
-const char* ssid = "trueGigatexFiber_ef4_2G";          // แก้ไข WiFi name
-const char* password = "XP6b7E2M";   // แก้ไข WiFi password
+// สำหรับเทสใน Wokwi ให้ใช้ "Wokwi-GUEST" และรหัสผ่าน "" นะครับ
+const char* ssid = "trueGigatexFiber_ef4_2G";          
+const char* password = "XP6b7E2M";   
 
 // ====== ตั้งค่า MQTT (Thingsboard) ======
 const char* mqtt_server = "tboard.ngrok.app";  
@@ -27,6 +33,43 @@ PubSubClient client(espClient);
 // ====== ตัวแปรสำหรับส่ง MQTT ======
 unsigned long lastMqttTime = 0;
 const unsigned long mqttInterval = 5000;  // ส่งทุก 5 วินาที
+
+// ====== ตั้งค่า URL ของ GitHub OTA ======
+// ระวัง: ต้องใช้ Raw Link (https://raw.githubusercontent.com/...)
+const char* update_url = "ใส่_URL_ไฟล์_BIN_จาก_GITHUB_ตรงนี้";
+
+
+// ----------------------------------------------------
+// ฟังก์ชันดึงไฟล์ OTA จาก GitHub
+// ----------------------------------------------------
+void doUpdate() {
+  WiFiClientSecure otaClient;
+  otaClient.setInsecure(); // ข้ามการตรวจ SSL เพื่อความง่ายในการเทส
+
+  Serial.println("\n====================================");
+  Serial.println("[OTA] เริ่มต้นตรวจสอบอัปเดตจาก GitHub...");
+  Serial.println("====================================");
+  
+  t_httpUpdate_return ret = httpUpdate.update(otaClient, update_url);
+
+  switch (ret) {
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("[OTA] อัปเดตล้มเหลว Error (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+      break;
+
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("[OTA] ไม่มีเวอร์ชันใหม่");
+      break;
+
+    case HTTP_UPDATE_OK:
+      Serial.println("[OTA] อัปเดตสำเร็จ! บอร์ดกำลังจะ Restart ใน 2 วินาที...");
+      delay(2000);
+      ESP.restart(); // สั่งรีบูตบอร์ดเพื่อใช้โค้ดใหม่
+      break;
+  }
+}
+// ----------------------------------------------------
+
 
 void setup_wifi() {
   Serial.print("\nConnecting to WiFi: ");
@@ -65,9 +108,9 @@ void reconnect_mqtt() {
   while (!client.connected()) {
     Serial.print("Attempting MQTT connection to Thingsboard...");
     
-    // เชื่อมต่อกับ Thingsboard โดยใช้ Access Token โดยไม่ต้องรหัสผ่าน
+    // เชื่อมต่อกับ Thingsboard โดยใช้ Access Token
     if (client.connect(mqtt_client_id, mqtt_access_token, "")) {
-      Serial.println("connected!");
+      Serial.println(">>> Firmware Version: 2.0 (OTA Success!) <<<");
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -80,6 +123,11 @@ void reconnect_mqtt() {
 void setup() {
   Serial.begin(115200);
   Wire.begin();
+
+  // ใส่ข้อความบอกเวอร์ชันไว้ตรงนี้ จะได้รู้ว่าอัปเดตผ่านไหม!
+  Serial.println("\n=================================");
+  Serial.println(">>> Firmware Version: 1.0 <<<");
+  Serial.println("=================================");
 
   while (!sensor.begin()) {
     Serial.println("Not found hardware :(");
@@ -94,6 +142,12 @@ void setup() {
   // ตั้งค่า MQTT
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(mqtt_callback);
+
+  // สั่งรัน OTA หลังจากเชื่อมต่อ WiFi เสร็จ (หน่วงเวลาไว้ดู Log 3 วินาที)
+  if (WiFi.status() == WL_CONNECTED) {
+    delay(3000); 
+    doUpdate(); 
+  }
 }
 
 void loop() {
