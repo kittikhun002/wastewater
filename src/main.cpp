@@ -5,43 +5,43 @@
 #include <WiFiManager.h>
 #include <IOXESP32_4-20mA_Receiver.h>
 #include <ArduinoJson.h>
- 
+
 // ====== Library สำหรับ OTA ======
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <WiFiClientSecure.h>
- 
+
 // ===== Sensor =====
 Receiver4_20 sensor_ph(&Wire, 0x44); 
 Receiver4_20 sensor_do(&Wire, 0x45);
- 
+
 // ===== MQTT (ThingsBoard) =====
 const char* mqtt_server = "0.tcp.ap.ngrok.io";
 const int mqtt_port = 14158;
 const char* token = "JrbWRmMjLTxrI4jtdxjk";
- 
+
 WiFiClient espClient;
 PubSubClient client(espClient);
- 
+
 // ===== OTA Settings =====
-String current_version = "1.1"; 
+String current_version = "1.2"; // 🔥 เปลี่ยนเป็น 1.2 แล้ว
 const char* version_url = "https://raw.githubusercontent.com/kittikhun002/wastewater/main/version.txt";
 const char* update_url = "https://github.com/kittikhun002/wastewater/releases/latest/download/firmware.bin";
- 
+
 // ===== Variables =====
 float phValue = 0;
 float doValue = 0;
 unsigned long lastSend = 0;
-const long interval = 600000; // 10 นาที
+const long interval = 600000; // 10 นาที (ถ้าตอนเทสอยากให้ส่งเร็วๆ แก้ตรงนี้เป็น 5000 ได้นะครับ)
 unsigned long lastReconnectAttempt = 0;
 unsigned long lastOtaCheck = 0;
 const unsigned long otaInterval = 86400000; // 24 ชม.
- 
+
 // ===== Error Correction =====
 float calculateError(float current) {
   return 0.008125 * current - 0.0325;
 }
- 
+
 // ===== OTA Functions =====
 String checkGitHubVersion() {
   WiFiClientSecure secureClient;
@@ -57,7 +57,7 @@ String checkGitHubVersion() {
   http.end();
   return new_version;
 }
- 
+
 void doUpdate() {
   WiFiClientSecure secureClient;
   secureClient.setInsecure();
@@ -65,7 +65,7 @@ void doUpdate() {
   Serial.println("🚀 Starting OTA Update...");
   t_httpUpdate_return ret = httpUpdate.update(secureClient, update_url);
 }
- 
+
 // ===== MQTT Reconnect (Non-Blocking) =====
 void reconnect() {
   if (WiFi.status() != WL_CONNECTED) return;
@@ -81,7 +81,7 @@ void reconnect() {
     }
   }
 }
- 
+
 // ===== อ่านค่า Sensor =====
 void readSensors() {
   // pH
@@ -91,7 +91,7 @@ void readSensors() {
     phValue = ((corr - 4.0) / 16.0) * 14.0;
     Serial.print("pH: "); Serial.println(phValue, 2);
   }
- 
+
   // DO
   if (sensor_do.measure()) {
     float current = constrain(sensor_do.current(), 4.0, 20.0);
@@ -100,22 +100,28 @@ void readSensors() {
     Serial.print("DO: "); Serial.println(doValue, 2);
   }
 }
- 
+
 // ===== Setup =====
 void setup() {
   Serial.begin(115200);
   Wire.begin();
+  
+  // 🔥 ป้ายประกาศตอนเปิดเครื่องเวอร์ชันใหม่
+  Serial.println("\n===========================");
+  Serial.println("🚀 ยินดีต้อนรับสู่ V1.2 (OTA Success!)");
+  Serial.println("===========================");
+
   while (!sensor_ph.begin() || !sensor_do.begin()) {
     Serial.println("❌ Sensors not ready, retrying...");
     delay(2000);
   }
   Serial.println("✅ Sensors Ready");
- 
+
   WiFiManager wm;
   wm.autoConnect("ESP32-Wastewater-Setup");
- 
+
   client.setServer(mqtt_server, mqtt_port);
- 
+
   // เช็ก OTA ทันทีที่เปิดเครื่อง
   if (WiFi.status() == WL_CONNECTED) {
     String net_v = checkGitHubVersion();
@@ -124,7 +130,7 @@ void setup() {
     }
   }
 }
- 
+
 // ===== Loop =====
 void loop() {
   // 1. จัดการการเชื่อมต่อ MQTT
@@ -133,8 +139,8 @@ void loop() {
   } else {
     client.loop();
   }
- 
-  // 2. อ่านและส่งข้อมูลตามรอบเวลา (10 นาที)
+
+  // 2. อ่านและส่งข้อมูลตามรอบเวลา
   if (millis() - lastSend > interval) {
     lastSend = millis();
     readSensors();
@@ -148,7 +154,7 @@ void loop() {
       Serial.println("📤 Data Sent to ThingsBoard");
     }
   }
- 
+
   // 3. เช็ก OTA ประจำวัน
   if (millis() - lastOtaCheck > otaInterval) {
     lastOtaCheck = millis();
