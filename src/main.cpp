@@ -30,7 +30,7 @@ Preferences preferences;
 
 // ===== OTA Settings =====
 // 🔥 แก้ที่นี่ที่เดียวจบ! ทั้งในระบบ OTA, Serial Monitor และ Dashboard จะเปลี่ยนตามหมด
-String current_version = "1.4"; 
+String current_version = "1.5"; 
 const char* version_url = "https://raw.githubusercontent.com/kittikhun002/wastewater/main/version.txt";
 const char* update_url = "https://github.com/kittikhun002/wastewater/releases/latest/download/firmware.bin";
 
