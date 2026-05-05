@@ -1,209 +1,204 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <IOXESP32_4-20mA_Receiver.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <WiFiManager.h>
+#include <IOXESP32_4-20mA_Receiver.h>
 #include <ArduinoJson.h>
-
-// ====== Library สำหรับ OTA ของ ESP32 ======
+#include <Preferences.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <WiFiClientSecure.h>
 
-Receiver4_20 sensor(&Wire, 0x44);
+// ===== Global Variables =====
+Preferences  preferences;
+char         tb_token[40]    = "";
+char         device_type[10] = "pre"; // "pre" หรือ "post" — ตั้งค่าผ่าน WiFiManager
+String       current_version = "1.6.0"; // อัปเดตเป็น 1.8.7
 
-// ====== ตั้งค่า WiFi ======
-const char* ssid = "trueGigatexFiber_ef4_2G";          
-const char* password = "XP6b7E2M";   
+Receiver4_20 sensor_ph(&Wire, 0x44);
+Receiver4_20 sensor_do(&Wire, 0x45);
+bool  ph_ready = false, do_ready = false;
+float phValue  = 0,     doValue  = 0;
 
-// ====== ตั้งค่า MQTT (Thingsboard) ======
-const char* mqtt_server = "tboard.ngrok.app";  
-const int mqtt_port = 1883;
-const char* mqtt_access_token = "JrbWRmMjLTxrI4jtdxjk";  
-const char* mqtt_client_id = "WaterSensor_001";
-
-WiFiClient espClient;
+const char*  mqtt_server = "thingsboard.lesyslab.com";
+WiFiClient   espClient;
 PubSubClient client(espClient);
 
-// ====== ตั้งค่าช่วง pH ======
-#define PH_MIN 0.0
-#define PH_MAX 14.0
+String version_url = "";
+String update_url  = "";
 
-// ====== ตัวแปรสำหรับจับเวลา ======
-unsigned long lastMqttTime = 0;
-const unsigned long mqttInterval = 5000;  // ส่งข้อมูลเซนเซอร์ทุก 5 วินาที
+// ---------------------------------------------------------
+// ค่า Calibration แยกตามบ่อ
+// สูตร: Error = (m * current) - c
+// แก้ตรงนี้เมื่อรู้ค่าจากการวัดจริง
+// ---------------------------------------------------------
+float pre_m  = 0.008125, pre_c  = 0.0325;
+float post_m = 0.008125, post_c = 0.0325;
 
-unsigned long lastReconnectAttempt = 0;   // [เพิ่มใหม่] จับเวลาต่อ ThingsBoard
+// ===== Calibration =====
+float calculateError(float current, float m, float c) {
+  return (m * current) - c;
+}
 
-unsigned long lastOtaCheckTime = 0;
-const unsigned long otaCheckInterval = 86400000; // เช็กอัปเดตวันละ 1 ครั้ง (24 ชั่วโมง)
-
-// ====== ตัวแปรสำหรับ OTA ======
-String current_version = "1.1"; // อัปเดตเป็น V1.1 (Non-Blocking)
-const char* update_url = "https://github.com/kittikhun002/wastewater/releases/latest/download/firmware.bin";
-const char* version_url = "https://raw.githubusercontent.com/kittikhun002/wastewater/main/version.txt";
-
-// ------------------------------------------------------------------
-// ฟังก์ชัน OTA
-// ------------------------------------------------------------------
+// ===== OTA =====
 String checkGitHubVersion() {
-  WiFiClientSecure client;
-  client.setInsecure(); 
-  HTTPClient http;
-  
-  http.begin(client, version_url);
-  int httpCode = http.GET(); 
-  
-  String new_version = "";
-  if (httpCode == HTTP_CODE_OK) {
-    new_version = http.getString();
-    new_version.trim();
-  } 
+  WiFiClientSecure sc; sc.setInsecure();
+  HTTPClient http; http.begin(sc, version_url);
+  String ver = "";
+  if (http.GET() == HTTP_CODE_OK) { ver = http.getString(); ver.trim(); }
   http.end();
-  return new_version;
+  return ver;
 }
 
 void doUpdate() {
-  WiFiClientSecure otaClient;
-  otaClient.setInsecure();
+  WiFiClientSecure sc; sc.setInsecure();
   httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  
-  Serial.println("\n[OTA] เริ่มดาวน์โหลดไฟล์ Firmware...");
-  t_httpUpdate_return ret = httpUpdate.update(otaClient, update_url);
+  Serial.println("🚀 Starting OTA Update...");
+  httpUpdate.update(sc, update_url);
+}
 
-  if (ret == HTTP_UPDATE_FAILED) {
-    Serial.printf("[OTA] ล้มเหลว Error (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+// ===== MQTT Callback =====
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String msg = "";
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+  if (msg.indexOf("OTA") >= 0) {
+    if (checkGitHubVersion() != current_version) doUpdate();
   }
 }
 
-// ------------------------------------------------------------------
-// ฟังก์ชัน WiFi
-// ------------------------------------------------------------------
-void setup_wifi() {
-  Serial.print("\nConnecting to WiFi: ");
-  Serial.println(ssid);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500); Serial.print("."); attempts++;
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi connected! IP address: ");
-    Serial.println(WiFi.localIP());
+// ===== MQTT Reconnect (มี throttle 5 วินาที) =====
+void reconnect() {
+  if (WiFi.status() != WL_CONNECTED || strlen(tb_token) < 5) return;
+
+  // throttle ป้องกันวิ่งทุก loop
+  static unsigned long lastReconnect = 0;
+  if (millis() - lastReconnect < 5000) return;
+  lastReconnect = millis();
+
+  if (client.connected()) return;
+
+  Serial.print("🔌 Connecting MQTT...");
+  if (client.connect("ESP32_Wastewater", tb_token, NULL)) {
+    Serial.println(" ✅ Connected");
+    client.subscribe("v1/devices/me/rpc/request/+");
+    String attr = "{\"firmware_version\":\"" + current_version + "\",\"device_type\":\"" + String(device_type) + "\"}";
+    client.publish("v1/devices/me/attributes", attr.c_str());
   } else {
-    Serial.println("\nFailed to connect to WiFi");
+    Serial.println(" ❌ failed rc=" + String(client.state()));
   }
 }
 
-void mqtt_callback(char* topic, byte* payload, unsigned int length) {
-  // รับข้อความจาก ThingsBoard
+// ===== Read Sensors (ทั้งสองบ่ออ่านทั้ง pH และ DO) =====
+void readSensors() {
+  // เลือกค่า calibration ตามบ่อ
+  float m = (strcmp(device_type, "post") == 0) ? post_m : pre_m;
+  float c = (strcmp(device_type, "post") == 0) ? post_c : pre_c;
+
+  // อ่าน pH
+  if (!ph_ready) ph_ready = sensor_ph.begin();
+  if (ph_ready && sensor_ph.measure()) {
+    float raw  = constrain(sensor_ph.current(), 4.0, 20.0);
+    float corr = raw + calculateError(raw, m, c);
+    phValue    = ((corr - 4.0) / 16.0) * 14.0;
+    Serial.printf("pH: %.2f (I=%.3f mA)\n", phValue, corr);
+  } else {
+    Serial.println("❌ pH read error");
+  }
+
+  // อ่าน DO
+  if (!do_ready) do_ready = sensor_do.begin();
+  if (do_ready && sensor_do.measure()) {
+    float raw  = constrain(sensor_do.current(), 4.0, 20.0);
+    float corr = raw + calculateError(raw, m, c);
+    doValue    = ((corr - 4.0) / 16.0) * 10.0;
+    Serial.printf("DO: %.2f mg/L (I=%.3f mA)\n", doValue, corr);
+  } else {
+    Serial.println("❌ DO read error");
+  }
 }
 
-// ------------------------------------------------------------------
-// SETUP
-// ------------------------------------------------------------------
+// ===== Setup =====
 void setup() {
   Serial.begin(115200);
   Wire.begin();
 
-  Serial.println("\n=================================");
-  Serial.println(">>> Wastewater System V: " + current_version + " <<<");
-  Serial.println("=================================");
+  preferences.begin("wastewater", false);
+  String saved_token = preferences.getString("token", "");
+  String saved_type  = preferences.getString("device_type", "pre");
+  saved_token.toCharArray(tb_token, 40);
+  saved_type.toCharArray(device_type, 10);
 
-  while (!sensor.begin()) {
-    Serial.println("Not found hardware :(");
-    delay(2000);
-  }
-  Serial.println("4-20mA pH Reader Ready");
-  
-  setup_wifi();
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(mqtt_callback);
+  // WiFiManager — ใส่ token และ device_type ตอนเชื่อม WiFi ครั้งแรก
+  WiFiManager wm;
+  WiFiManagerParameter custom_token("token", "ThingsBoard Token", tb_token, 40);
+  WiFiManagerParameter custom_type("dtype", "pre / post", device_type, 10);
+  wm.addParameter(&custom_token);
+  wm.addParameter(&custom_type);
 
-  // เช็กอัปเดต 1 รอบตอนเพิ่งเสียบปลั๊กไฟ
-  if (WiFi.status() == WL_CONNECTED) {
-    String available_version = checkGitHubVersion();
-    if (available_version != "" && available_version != current_version) {
-      Serial.println(">>> เจออัปเดตใหม่ตอนเปิดเครื่อง! กำลังโหลด...");
-      doUpdate(); 
-    }
+  String chipId = String((uint32_t)ESP.getEfuseMac(), HEX);
+  chipId.toUpperCase();
+  String apName = "Wastewater-" + chipId;
+
+  if (!wm.autoConnect(apName.c_str())) { delay(3000); ESP.restart(); }
+
+  // บันทึกค่าถ้าเปลี่ยน แล้ว restart
+  String new_token = String(custom_token.getValue());
+  String new_type  = String(custom_type.getValue()); new_type.trim(); new_type.toLowerCase();
+  if (new_token != saved_token || new_type != saved_type) {
+    preferences.putString("token", new_token);
+    preferences.putString("device_type", new_type);
+    delay(1000); ESP.restart();
   }
+
+  // สร้าง URL OTA ตาม device_type
+  version_url = "https://raw.githubusercontent.com/kittikhun002/wastewater/main/" + String(device_type) + "_version.txt";
+  update_url  = "https://github.com/kittikhun002/wastewater/releases/latest/download/" + String(device_type) + "_firmware.bin";
+
+  Serial.println("\n===========================");
+  Serial.println("🚀 Wastewater V" + current_version);
+  Serial.println("📍 บ่อ: " + String(device_type));
+  Serial.println("===========================");
+
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(mqttCallback);
+
+  // เช็ก OTA ตอนเปิดเครื่อง
+  if (WiFi.status() == WL_CONNECTED && checkGitHubVersion() != current_version) doUpdate();
 }
 
-// ------------------------------------------------------------------
-// MAIN LOOP
-// ------------------------------------------------------------------
+// ===== Loop =====
 void loop() {
-  delay(200);
+  // MQTT
+  if (!client.connected()) reconnect();
+  else client.loop();
 
-  // ---------------------------------------------------------
-  // 1. ระบบรักษาการเชื่อมต่อ MQTT (Non-Blocking)
-  // ---------------------------------------------------------
-  if (!client.connected()) {
-    if (WiFi.status() == WL_CONNECTED) {
-      long now = millis();
-      // ลองต่อใหม่ทุกๆ 5 วินาทีเท่านั้น จะไม่วนลูปค้าง (ไม่มี while แล้ว)
-      if (now - lastReconnectAttempt > 5000) {
-        lastReconnectAttempt = now;
-        Serial.print("Attempting MQTT connection to Thingsboard...");
-        if (client.connect(mqtt_client_id, mqtt_access_token, "")) {
-          Serial.println("connected!");
-          lastReconnectAttempt = 0; // รีเซ็ตเวลาเมื่อต่อติด
-        } else {
-          Serial.print("failed, rc=");
-          Serial.print(client.state());
-          Serial.println(" try again in 5 seconds");
-        }
-      }
+  // ส่งข้อมูลทุก 10 นาที
+  static unsigned long lastSend = 0;
+  if (millis() - lastSend > 600000) {
+    lastSend = millis();
+    readSensors();
+
+    if (client.connected()) {
+      StaticJsonDocument<256> doc;
+      doc["version"]     = current_version;
+      doc["device_type"] = device_type;
+
+      // 🛠️ [แก้ไขแล้ว] ใช้ Key มาตรฐาน "ph" และ "do" ตรงๆ เลย
+      if (ph_ready) doc["ph"] = phValue;
+      if (do_ready) doc["do"] = doValue;
+
+      char payload[256];
+      serializeJson(doc, payload);
+      client.publish("v1/devices/me/telemetry", payload);
+      Serial.println("📤 Sent: " + String(payload));
     }
-  } else {
-    client.loop(); // ให้ทำงานเฉพาะตอนที่ต่อติดแล้ว
   }
 
-  // ---------------------------------------------------------
-  // 2. งานหลัก: อ่านค่าเซนเซอร์และส่งขึ้น ThingsBoard
-  // ---------------------------------------------------------
-  if (sensor.measure()) {
-    float current = sensor.current(); 
-    if (current < 4.0) current = 4.0;
-    if (current > 20.0) current = 20.0;
-
-    float ph = ((current - 4.0) / 16.0) * (PH_MAX - PH_MIN) + PH_MIN;
-
-    // ส่งข้อมูลทุกๆ 5 วินาที (และต้องต่อ ThingsBoard ติดอยู่ถึงจะส่ง)
-    if (millis() - lastMqttTime >= mqttInterval) {
-      lastMqttTime = millis();
-      
-      Serial.print("Current: "); Serial.print(current, 2);
-      Serial.print(" mA  |  pH: "); Serial.println(ph, 2);
-
-      if (client.connected()) {
-        StaticJsonDocument<200> doc;
-        doc["ph"] = ph;
-        char payload[200];
-        serializeJson(doc, payload);
-        client.publish("v1/devices/me/telemetry", payload);
-      }
-    }
-  } else {
-    Serial.println("Hardware error !");
-  }
-
-  // ---------------------------------------------------------
-  // 3. งานรอง: ระบบ OTA แอบเช็กวันละ 1 ครั้ง
-  // ---------------------------------------------------------
-  if (millis() - lastOtaCheckTime >= otaCheckInterval) {
-    lastOtaCheckTime = millis(); 
-    
-    Serial.println("\n[Auto-Check] ได้เวลาเช็กอัปเดตประจำวัน...");
-    String available_version = checkGitHubVersion();
-    
-    if (available_version != "" && available_version != current_version) {
-      Serial.println(">>> เจอเวอร์ชันใหม่ (" + available_version + ")! สั่งดาวน์โหลดเดี๋ยวนี้!");
-      doUpdate();
-    } else {
-      Serial.println(">>> ระบบเป็นเวอร์ชันล่าสุดแล้ว ลุยงานต่อ!");
-    }
+  // เช็ก OTA ทุก 24 ชม.
+  static unsigned long lastOtaCheck = 0;
+  if (millis() - lastOtaCheck > 86400000) {
+    lastOtaCheck = millis();
+    if (checkGitHubVersion() != current_version) doUpdate();
   }
 }

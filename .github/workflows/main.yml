@@ -24,10 +24,18 @@ jobs:
       - name: Run PlatformIO Build
         run: pio run
 
+      # 🛠️ [เพิ่มสเต็ปนี้] ให้หุ่นยนต์ก๊อปปี้ไฟล์แยกเป็น 2 ชื่อ
+      - name: Prepare Pre and Post Firmware Files
+        run: |
+          cp .pio/build/*/firmware.bin pre_firmware.bin
+          cp .pio/build/*/firmware.bin post_firmware.bin
+
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v1
         with:
-          files: .pio/build/*/firmware.bin
+          # 🛠️ [แก้ไขตรงนี้] สั่งให้อัปโหลดไฟล์ที่เปลี่ยนชื่อแล้วขึ้นไปแทน
+          files: |
+            pre_firmware.bin
+            post_firmware.bin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-# Updated at: 2026-04-22
