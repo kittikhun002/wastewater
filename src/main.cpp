@@ -14,7 +14,7 @@
 Preferences  preferences;
 char         tb_token[40]    = "";
 char         device_type[10] = "pre"; // "pre" หรือ "post" — ตั้งค่าผ่าน WiFiManager
-String       current_version = "1.6.0"; // อัปเดตเป็น 1.8.7
+String       current_version = "1.6.1"; // อัปเดตเป็น 1.6.1 (เพิ่มระบบ Fail-safe)
 
 Receiver4_20 sensor_ph(&Wire, 0x44);
 Receiver4_20 sensor_do(&Wire, 0x45);
@@ -169,9 +169,24 @@ void setup() {
 
 // ===== Loop =====
 void loop() {
-  // MQTT
-  if (!client.connected()) reconnect();
-  else client.loop();
+  // 🛡️ ตัวแปรเก็บเวลาตอนที่เน็ต/ThingsBoard หลุด
+  static unsigned long tbOfflineStartTime = millis();
+
+  // จัดการการเชื่อมต่อ MQTT
+  if (!client.connected()) {
+    reconnect();
+    
+    // 🛡️ [เพิ่มใหม่] ถ้า ThingsBoard หลุดติดต่อกันเกิน 10 นาที (600,000 ms)
+    if (millis() - tbOfflineStartTime > 600000) {
+      Serial.println("⚠️ ThingsBoard หลุดเกิน 10 นาที! กำลังเช็กอัปเดตฉุกเฉินบน Git...");
+      if (checkGitHubVersion() != current_version) doUpdate();
+      
+      tbOfflineStartTime = millis(); // รีเซ็ตเวลาเพื่อไม่ให้มันเช็กรัวๆ จนโดนบล็อก
+    }
+  } else {
+    client.loop();
+    tbOfflineStartTime = millis(); // ถ้ายืนยันว่ายังเชื่อมต่ออยู่ ให้รีเซ็ตเวลาทิ้งไปเรื่อยๆ
+  }
 
   // ส่งข้อมูลทุก 10 นาที
   static unsigned long lastSend = 0;
@@ -184,7 +199,7 @@ void loop() {
       doc["version"]     = current_version;
       doc["device_type"] = device_type;
 
-      // 🛠️ [แก้ไขแล้ว] ใช้ Key มาตรฐาน "ph" และ "do" ตรงๆ เลย
+      // ใช้ Key มาตรฐาน "ph" และ "do" ตรงๆ เลย
       if (ph_ready) doc["ph"] = phValue;
       if (do_ready) doc["do"] = doValue;
 
@@ -195,7 +210,7 @@ void loop() {
     }
   }
 
-  // เช็ก OTA ทุก 24 ชม.
+  // เช็ก OTA ปกติทุก 24 ชม. (ทำงานอิสระ ไม่สนว่า ThingsBoard จะหลุดหรือไม่)
   static unsigned long lastOtaCheck = 0;
   if (millis() - lastOtaCheck > 86400000) {
     lastOtaCheck = millis();
