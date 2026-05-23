@@ -14,7 +14,7 @@
 Preferences  preferences;
 char         tb_token[40]    = "";
 char         device_type[10] = "pre"; // "pre" หรือ "post" — ตั้งค่าผ่าน WiFiManager
-String       current_version = "1.6.4"; // อัปเดตเป็น 1.6.3 (เพิ่มระบบ Fail-safe)
+String       current_version = "1.6.5"; // อัปเดตเป็น 1.6.3 (เพิ่มระบบ Fail-safe)
 
 Receiver4_20 sensor_ph(&Wire, 0x44);
 Receiver4_20 sensor_do(&Wire, 0x45);
@@ -190,7 +190,7 @@ void loop() {
 
   // ส่งข้อมูลทุก 10 นาที
   static unsigned long lastSend = 0;
-  if (millis() - lastSend > 30000) {
+  if (millis() - lastSend > 10000) {
     lastSend = millis();
     readSensors();
 
