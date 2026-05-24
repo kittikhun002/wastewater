@@ -14,7 +14,7 @@
 Preferences  preferences;
 char         tb_token[40]    = "";
 char         device_type[10] = "pre"; // "pre" หรือ "post" — ตั้งค่าผ่าน WiFiManager
-String       current_version = "1.6.6"; // อัปเดตเป็น 1.6.3 (เพิ่มระบบ Fail-safe)
+String       current_version = "1.6.7"; // อัปเดตเป็น 1.6.3 (เพิ่มระบบ Fail-safe)
 
 Receiver4_20 sensor_ph(&Wire, 0x44);
 Receiver4_20 sensor_do(&Wire, 0x45);
@@ -111,7 +111,7 @@ void readSensors() {
   if (do_ready && sensor_do.measure()) {
     float raw  = constrain(sensor_do.current(), 4.0, 20.0);
     float corr = raw + calculateError(raw, m, c);
-    doValue    = ((corr - 4.0) / 16.0) * 10.0;
+    doValue    = ((corr - 4.0) / 16.0) * 20.0;
     Serial.printf("DO: %.2f mg/L (I=%.3f mA)\n", doValue, corr);
   } else {
     Serial.println("❌ DO read error");
