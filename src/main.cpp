@@ -9,12 +9,13 @@
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <WiFiClientSecure.h>
+#include <time.h>
 
 // ===== Global Variables =====
 Preferences  preferences;
 char         tb_token[40]    = "";
 char         device_type[10] = "pre"; // "pre" หรือ "post" — ตั้งค่าผ่าน WiFiManager
-String       current_version = "1.7.0"; // อัปเดตเป็น 1.6.3 (เพิ่มระบบ Fail-safe)
+String       current_version = "1.7.2"; // อัปเดตเป็น 1.6.3 (เพิ่มระบบ Fail-safe)
 
 Receiver4_20 sensor_ph(&Wire, 0x44);
 Receiver4_20 sensor_do(&Wire, 0x45);
@@ -22,6 +23,10 @@ bool  ph_ready = false, do_ready = false;
 float phValue  = 0,     doValue  = 0;
 
 const char*  mqtt_server = "thingsboard.lesyslab.com";
+const char*  ntp_server_1 = "pool.ntp.org";
+const char*  ntp_server_2 = "time.google.com";
+const time_t TELEMETRY_INTERVAL_SECONDS = 600;
+const time_t MIN_VALID_EPOCH = 1700000000; // 2023-11-14; rejects unsynchronized RTC values
 WiFiClient   espClient;
 PubSubClient client(espClient);
 
@@ -67,6 +72,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
+// ===== NTP / aligned telemetry time =====
+bool isTimeSynchronized() {
+  return time(nullptr) >= MIN_VALID_EPOCH;
+}
+
+time_t alignedTelemetrySlot() {
+  time_t now = time(nullptr);
+  return (now / TELEMETRY_INTERVAL_SECONDS) * TELEMETRY_INTERVAL_SECONDS;
+}
+
 // ===== MQTT Reconnect (มี throttle 5 วินาที) =====
 void reconnect() {
   if (WiFi.status() != WL_CONNECTED || strlen(tb_token) < 5) return;
@@ -78,8 +93,15 @@ void reconnect() {
 
   if (client.connected()) return;
 
-  Serial.print("🔌 Connecting MQTT...");
-  if (client.connect("ESP32_Wastewater", tb_token, NULL)) {
+  uint64_t mac = ESP.getEfuseMac();
+  char mqttClientId[64];
+  snprintf(mqttClientId, sizeof(mqttClientId), "ESP32_Wastewater_%s_%04X%08X",
+           device_type, (uint16_t)(mac >> 32), (uint32_t)mac);
+
+  Serial.print("🔌 Connecting MQTT as ");
+  Serial.print(mqttClientId);
+  Serial.print("...");
+  if (client.connect(mqttClientId, tb_token, NULL)) {
     Serial.println(" ✅ Connected");
     client.subscribe("v1/devices/me/rpc/request/+");
     String attr = "{\"firmware_version\":\"" + current_version + "\",\"device_type\":\"" + String(device_type) + "\"}";
@@ -160,6 +182,16 @@ void setup() {
   Serial.println("📍 บ่อ: " + String(device_type));
   Serial.println("===========================");
 
+  // UTC epoch time is shared by both boards; timezone is intentionally zero.
+  configTime(0, 0, ntp_server_1, ntp_server_2);
+  Serial.print("🕒 Synchronizing NTP");
+  unsigned long ntpWaitStart = millis();
+  while (!isTimeSynchronized() && millis() - ntpWaitStart < 15000) {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println(isTimeSynchronized() ? " ✅ Synchronized" : " ⚠️ Pending (will retry in background)");
+
   client.setServer(mqtt_server, 1883);
   client.setCallback(mqttCallback);
 
@@ -188,25 +220,37 @@ void loop() {
     tbOfflineStartTime = millis(); // ถ้ายืนยันว่ายังเชื่อมต่ออยู่ ให้รีเซ็ตเวลาทิ้งไปเรื่อยๆ
   }
 
-  // ส่งข้อมูลทุก 10 นาที
-  static unsigned long lastSend = 0;
-  if (millis() - lastSend > 120000) {
-    lastSend = millis();
-    readSensors();
+  // Measure once per UTC-aligned 10-minute slot. Both boards therefore use
+  // exactly the same client-supplied ThingsBoard timestamp for each period.
+  static time_t lastMeasuredSlot = 0;
+  static time_t lastSentSlot = 0;
+  if (isTimeSynchronized()) {
+    time_t slot = alignedTelemetrySlot();
 
-    if (client.connected()) {
-      StaticJsonDocument<256> doc;
-      doc["version"]     = current_version;
-      doc["device_type"] = device_type;
+    if (slot > lastMeasuredSlot) {
+      lastMeasuredSlot = slot;
+      readSensors();
+    }
+
+    if (slot > lastSentSlot && slot == lastMeasuredSlot && client.connected()) {
+      StaticJsonDocument<384> doc;
+      doc["ts"] = (uint64_t)slot * 1000ULL;
+      JsonObject values = doc.createNestedObject("values");
+      values["version"]     = current_version;
+      values["device_type"] = device_type;
 
       // ใช้ Key มาตรฐาน "ph" และ "do" ตรงๆ เลย
-      if (ph_ready) doc["ph"] = phValue;
-      if (do_ready) doc["do"] = doValue;
+      if (ph_ready) values["ph"] = phValue;
+      if (do_ready) values["do"] = doValue;
 
-      char payload[256];
-      serializeJson(doc, payload);
-      client.publish("v1/devices/me/telemetry", payload);
-      Serial.println("📤 Sent: " + String(payload));
+      char payload[384];
+      serializeJson(doc, payload, sizeof(payload));
+      if (client.publish("v1/devices/me/telemetry", payload)) {
+        lastSentSlot = slot;
+        Serial.println("📤 Sent: " + String(payload));
+      } else {
+        Serial.println("❌ Telemetry publish failed; will retry this slot");
+      }
     }
   }
 
